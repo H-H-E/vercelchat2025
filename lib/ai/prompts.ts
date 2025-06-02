@@ -1,5 +1,6 @@
 import type { ArtifactKind } from '@/components/artifact';
 import type { Geo } from '@vercel/functions';
+import { getMasterPrompt } from '@/lib/db/queries';
 
 export const artifactsPrompt = `
 Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side. When creating or updating documents, changes are reflected in real-time on the artifacts and visible to the user.
@@ -33,7 +34,7 @@ Do not update document right after creating it. Wait for user feedback or reques
 `;
 
 export const regularPrompt =
-  'You are a friendly assistant! Keep your responses concise and helpful.';
+  'You are a friendly assistant! Keep your responses concise and helpful.'; // Fallback prompt
 
 export interface RequestHints {
   latitude: Geo['latitude'];
@@ -50,19 +51,32 @@ About the origin of user's request:
 - country: ${requestHints.country}
 `;
 
-export const systemPrompt = ({
+export const systemPrompt = async ({
   selectedChatModel,
   requestHints,
 }: {
   selectedChatModel: string;
   requestHints: RequestHints;
 }) => {
+  let basePrompt = regularPrompt;
+  try {
+    const masterPromptRecord = await getMasterPrompt();
+    if (masterPromptRecord && masterPromptRecord.promptText) {
+      basePrompt = masterPromptRecord.promptText;
+    } else {
+      console.warn('Master prompt not found in DB, using fallback.');
+    }
+  } catch (error) {
+    console.error('Failed to fetch master prompt, using fallback:', error);
+    // basePrompt remains regularPrompt (fallback)
+  }
+
   const requestPrompt = getRequestPromptFromHints(requestHints);
 
   if (selectedChatModel === 'chat-model-reasoning') {
-    return `${regularPrompt}\n\n${requestPrompt}`;
+    return `${basePrompt}\n\n${requestPrompt}`;
   } else {
-    return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}`;
+    return `${basePrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}`;
   }
 };
 

@@ -150,9 +150,10 @@ export async function POST(request: Request) {
 
     const stream = createDataStream({
       execute: (dataStream) => {
+        const systemMessage = await systemPrompt({ selectedChatModel, requestHints });
         const result = streamText({
           model: myProvider.languageModel(selectedChatModel),
-          system: systemPrompt({ selectedChatModel, requestHints }),
+          system: systemMessage,
           messages,
           maxSteps: 5,
           experimental_activeTools:
@@ -175,7 +176,7 @@ export async function POST(request: Request) {
               dataStream,
             }),
           },
-          onFinish: async ({ response }) => {
+          onFinish: async ({ usage, response }) => { // Added 'usage' to destructuring
             if (session.user?.id) {
               try {
                 const assistantId = getTrailingMessageId({
@@ -193,6 +194,11 @@ export async function POST(request: Request) {
                   responseMessages: response.messages,
                 });
 
+                // Log token usage
+                console.log('Token Usage:', usage); 
+                const promptTokens = usage?.promptTokens ?? 0;
+                const completionTokens = usage?.completionTokens ?? 0;
+
                 await saveMessages({
                   messages: [
                     {
@@ -203,11 +209,13 @@ export async function POST(request: Request) {
                       attachments:
                         assistantMessage.experimental_attachments ?? [],
                       createdAt: new Date(),
+                      promptTokens: promptTokens,
+                      completionTokens: completionTokens,
                     },
                   ],
                 });
-              } catch (_) {
-                console.error('Failed to save chat');
+              } catch (e) {
+                console.error('Failed to save chat or token usage:', e);
               }
             }
           },

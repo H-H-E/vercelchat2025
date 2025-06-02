@@ -9,6 +9,8 @@ import {
   primaryKey,
   foreignKey,
   boolean,
+  serial,
+  integer,
 } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('User', {
@@ -56,6 +58,8 @@ export const message = pgTable('Message_v2', {
   parts: json('parts').notNull(),
   attachments: json('attachments').notNull(),
   createdAt: timestamp('createdAt').notNull(),
+  promptTokens: integer('prompt_tokens').default(0),
+  completionTokens: integer('completion_tokens').default(0),
 });
 
 export type DBMessage = InferSelectModel<typeof message>;
@@ -168,3 +172,12 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+export const masterPrompts = pgTable('master_prompts', {
+  id: serial('id').primaryKey(),
+  promptText: text('prompt_text').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export type MasterPrompt = InferSelectModel<typeof masterPrompts>;

@@ -27,6 +27,7 @@ import {
   type DBMessage,
   type Chat,
   stream,
+  masterPrompts,
 } from './schema';
 import type { ArtifactKind } from '@/components/artifact';
 import { generateUUID } from '../utils';
@@ -46,6 +47,39 @@ export async function getUser(email: string): Promise<Array<User>> {
     return await db.select().from(user).where(eq(user.email, email));
   } catch (error) {
     console.error('Failed to get user from database');
+    throw error;
+  }
+}
+
+// Queries for master_prompts table
+export async function getMasterPrompt(): Promise<{ id: number; promptText: string; createdAt: Date; updatedAt: Date } | null> {
+  try {
+    const result = await db
+      .select()
+      .from(masterPrompts)
+      .where(eq(masterPrompts.id, 1)) // Assuming the master prompt has id = 1
+      .limit(1);
+    return result.length > 0 ? result[0] : null;
+  } catch (error) {
+    console.error('Failed to get master prompt from database');
+    throw error;
+  }
+}
+
+export async function updateMasterPrompt(promptText: string): Promise<Array<{ id: number; promptText: string; updatedAt: Date }>> {
+  try {
+    const newUpdatedAt = new Date();
+    return await db
+      .update(masterPrompts)
+      .set({ promptText: promptText, updatedAt: newUpdatedAt })
+      .where(eq(masterPrompts.id, 1)) // Assuming the master prompt has id = 1
+      .returning({
+        id: masterPrompts.id,
+        promptText: masterPrompts.promptText,
+        updatedAt: masterPrompts.updatedAt,
+      });
+  } catch (error) {
+    console.error('Failed to update master prompt in database');
     throw error;
   }
 }

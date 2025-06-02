@@ -23,14 +23,16 @@ export const myProvider = isTestEnvironment
     })
   : customProvider({
       languageModels: {
-        'chat-model': xai('grok-2-vision-1212'),
+        'chat-model': xai('google-gemini-2.5-flash'),
         'chat-model-reasoning': wrapLanguageModel({
-          model: xai('grok-3-mini-beta'),
+          model: xai('google-gemini-2.5-flash'),
           middleware: extractReasoningMiddleware({ tagName: 'think' }),
         }),
-        'title-model': xai('grok-2-1212'),
-        'artifact-model': xai('grok-2-1212'),
+        'title-model': xai('google-gemini-2.5-flash'),
+        'artifact-model': xai('google-gemini-2.5-flash'),
       },
+      // Keeping imageModels as is, assuming it's not part of this change.
+      // If it should be removed, I'll need further clarification.
       imageModels: {
         'small-model': xai.image('grok-2-image'),
       },
