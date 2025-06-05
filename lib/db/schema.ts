@@ -9,6 +9,8 @@ import {
   primaryKey,
   foreignKey,
   boolean,
+  integer,
+  customType,
 } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('User', {
@@ -168,3 +170,51 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+export const admin_prompts = pgTable('admin_prompts', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  text: text('text').notNull(),
+  active: boolean('active').default(false).notNull(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  createdBy: uuid('createdBy').references(() => user.id), // Assuming 'user' is the name of your users table
+});
+
+export const token_usage = pgTable('token_usage', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  user_id: uuid('user_id').references(() => user.id).notNull(),
+  chat_id: uuid('chat_id'), // Nullable, as usage might not always be tied to a specific chat
+  prompt_tokens: integer('prompt_tokens').default(0).notNull(),
+  completion_tokens: integer('completion_tokens').default(0).notNull(),
+  created_at: timestamp('created_at').defaultNow().notNull(),
+});
+
+// Custom type for pgvector's vector type
+// This defines the SQL data type; actual to/from driver conversion might need more handling
+// for direct Drizzle ORM operations if it involves complex parsing/formatting.
+// For schema generation, specifying dataType is the key.
+const vectorColumn = customType<{ data: number[], dimensions?: number, name?: string }>({
+  dataType(config) {
+    // config contains { dimensions, name } if you pass them to vectorColumn instance
+    // For pgvector, the type is vector(dimensions)
+    // config.dimensions should be passed when using vectorColumn, e.g., vectorColumn('embedding', { dimensions: 1536 })
+    return `vector(${config?.dimensions ?? 1536})`; // Default to 1536 if not specified, though it should be.
+  },
+  // toDriver(value: number[]): string {
+  //   // pgvector from 'pgvector' package has a helper: pgvector.toSql(value)
+  //   // For now, just stringifying, assuming direct use or migration generation focus.
+  //   return JSON.stringify(value);
+  // },
+  // fromDriver(value: string): number[] {
+  //   // return JSON.parse(value); // Simplistic, actual format is '[1,2,3]'
+  // }
+});
+
+
+export const memories = pgTable('memories', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  user_id: uuid('user_id').references(() => user.id).notNull(),
+  content: text('content').notNull(),
+  embedding: vectorColumn('embedding', { dimensions: 1536 }).notNull(), // Specify dimensions here
+  created_at: timestamp('created_at').defaultNow().notNull(),
+});

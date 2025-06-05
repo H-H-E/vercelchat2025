@@ -2,11 +2,12 @@ import {
   appendClientMessage,
   appendResponseMessages,
   createDataStream,
+  generateEmbedding,
   smoothStream,
   streamText,
 } from 'ai';
 import { auth, type UserType } from '@/app/(auth)/auth';
-import { type RequestHints, systemPrompt } from '@/lib/ai/prompts';
+import { type RequestHints, getSystemPrompt } from '@/lib/ai/prompts'; // Changed systemPrompt to getSystemPrompt
 import {
   createStreamId,
   deleteChatById,
@@ -16,6 +17,10 @@ import {
   getStreamIdsByChatId,
   saveChat,
   saveMessages,
+  recordUsage,
+  sumTokenUsageForUserInLast24h,
+  saveMemory,
+  getRelevantMemories,
 } from '@/lib/db/queries';
 import { generateUUID, getTrailingMessageId } from '@/lib/utils';
 import { generateTitleFromUserMessage } from '../../actions';
@@ -82,14 +87,13 @@ export async function POST(request: Request) {
 
     const userType: UserType = session.user.type;
 
-    const messageCount = await getMessageCountByUserId({
-      id: session.user.id,
-      differenceInHours: 24,
-    });
+    // Check token usage against daily limit
+    const tokensUsedToday = await sumTokenUsageForUserInLast24h(session.user.id);
+    const dailyTokenLimit = entitlementsByUserType[userType].maxTokensPerDay;
 
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerDay) {
+    if (tokensUsedToday >= dailyTokenLimit) {
       return new Response(
-        'You have exceeded your maximum number of messages for the day! Please try again later.',
+        `You have exceeded your daily token limit (${dailyTokenLimit} tokens). Please try again later.`,
         {
           status: 429,
         },
@@ -145,14 +149,85 @@ export async function POST(request: Request) {
       ],
     });
 
+    // Generate and save embedding for the user's message
+    if (session.user.id && message.parts) {
+      const userMessageContent = message.parts
+        .filter(part => part.type === 'text')
+        .map(part => (part as { type: 'text'; text: string }).text)
+        .join('\n');
+
+      if (userMessageContent.trim().length > 0) {
+        try {
+          const embeddingModel = myProvider.embeddingModel(
+            process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+          );
+          const { embedding } = await generateEmbedding({
+            model: embeddingModel,
+            value: userMessageContent,
+          });
+          await saveMemory({
+            userId: session.user.id,
+            content: userMessageContent,
+            embedding,
+          });
+        } catch (embeddingError) {
+          console.error('Error generating or saving memory embedding:', embeddingError);
+          // Decide if this error should halt execution or just be logged.
+          // For now, just logging.
+        }
+      }
+    }
+
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
+
+    // --- BEGIN Memory Retrieval and Prompt Augmentation ---
+    // Fetch base system prompt (potentially from DB with caching)
+    let baseSystemPromptText = await getSystemPrompt({ selectedChatModel, requestHints });
+    let finalSystemPrompt = baseSystemPromptText; // Initialize finalSystemPrompt with the base
+
+    if (session.user.id && message.parts) {
+      const userQueryText = message.parts
+        .filter(part => part.type === 'text')
+        .map(part => (part as { type: 'text'; text: string }).text)
+        .join('\n');
+
+      if (userQueryText.trim().length > 0) {
+        try {
+          const embeddingModel = myProvider.embeddingModel(
+            process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+          );
+          const { embedding: queryEmbedding } = await generateEmbedding({
+            model: embeddingModel,
+            value: userQueryText,
+          });
+
+          const relevantMemoryContents = await getRelevantMemories({
+            userId: session.user.id,
+            queryEmbedding,
+            limit: 5, // Configurable limit
+          });
+
+          if (relevantMemoryContents.length > 0) {
+            const memoryBlock = "Relevant past conversations (ignore if not relevant to the current query):\n" +
+                                relevantMemoryContents.map(mem => `- ${mem}`).join("\n");
+            // baseSystemPromptText is already fetched and contains the full prompt including request hints and artifact logic
+            finalSystemPrompt = `${baseSystemPromptText}\n\n${memoryBlock}`;
+          }
+          // If no relevant memories, finalSystemPrompt remains baseSystemPromptText
+        } catch (memoryError) {
+          console.error('Error retrieving or processing memories:', memoryError);
+          // Fallback to base system prompt already assigned
+        }
+      }
+    }
+    // --- END Memory Retrieval and Prompt Augmentation ---
 
     const stream = createDataStream({
       execute: (dataStream) => {
         const result = streamText({
           model: myProvider.languageModel(selectedChatModel),
-          system: systemPrompt({ selectedChatModel, requestHints }),
+          system: finalSystemPrompt, // Use the potentially augmented system prompt
           messages,
           maxSteps: 5,
           experimental_activeTools:
@@ -206,8 +281,20 @@ export async function POST(request: Request) {
                     },
                   ],
                 });
-              } catch (_) {
-                console.error('Failed to save chat');
+
+                // Record token usage
+                const { promptTokens = 0, completionTokens = 0 } = response.usage ?? {};
+                if (session.user.id && id) { // id is chatId here
+                  await recordUsage({
+                    userId: session.user.id,
+                    chatId: id,
+                    promptTokens,
+                    completionTokens,
+                  });
+                }
+
+              } catch (error) { // Changed _ to error to potentially log it if needed
+                console.error('Error in onFinish callback (saving message or recording usage):', error);
               }
             }
           },

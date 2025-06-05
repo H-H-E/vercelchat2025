@@ -6,7 +6,7 @@ import { authConfig } from './auth.config';
 import { DUMMY_PASSWORD } from '@/lib/constants';
 import type { DefaultJWT } from 'next-auth/jwt';
 
-export type UserType = 'guest' | 'regular';
+export type UserType = 'student' | 'regular' | 'admin';
 
 declare module 'next-auth' {
   interface Session extends DefaultSession {
@@ -59,6 +59,9 @@ export const {
 
         if (!passwordsMatch) return null;
 
+        if (user.email === 'admin@poiesis.ai') {
+          return { ...user, type: 'admin' };
+        }
         return { ...user, type: 'regular' };
       },
     }),
@@ -67,7 +70,7 @@ export const {
       credentials: {},
       async authorize() {
         const [guestUser] = await createGuestUser();
-        return { ...guestUser, type: 'guest' };
+        return { ...guestUser, type: 'student' };
       },
     }),
   ],

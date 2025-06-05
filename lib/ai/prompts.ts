@@ -1,5 +1,6 @@
 import type { ArtifactKind } from '@/components/artifact';
 import type { Geo } from '@vercel/functions';
+import { getActiveAdminPrompt } from '@/lib/db/queries'; // New import
 
 export const artifactsPrompt = `
 Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side. When creating or updating documents, changes are reflected in real-time on the artifacts and visible to the user.
@@ -32,8 +33,41 @@ This is a guide for using artifacts tools: \`createDocument\` and \`updateDocume
 Do not update document right after creating it. Wait for user feedback or request to update it.
 `;
 
-export const regularPrompt =
+export const regularPrompt = // This will serve as a fallback if DB prompt fails
   'You are a friendly assistant! Keep your responses concise and helpful.';
+
+interface CachedPrompt {
+  text: string;
+  version: number;
+  fetchedAt: number;
+}
+let activePromptCache: CachedPrompt | null = null;
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+async function fetchAndCacheActiveSystemPrompt(): Promise<{ text: string; version: number }> {
+  if (activePromptCache && (Date.now() - activePromptCache.fetchedAt < CACHE_DURATION_MS)) {
+    // console.log('Returning cached active prompt version:', activePromptCache.version);
+    return { text: activePromptCache.text, version: activePromptCache.version };
+  }
+
+  // console.log('Fetching active prompt from DB');
+  try {
+    const dbPrompt = await getActiveAdminPrompt();
+    if (dbPrompt) {
+      activePromptCache = { text: dbPrompt.text, version: dbPrompt.version, fetchedAt: Date.now() };
+      // console.log('Fetched and cached new prompt version:', dbPrompt.version);
+      return { text: dbPrompt.text, version: dbPrompt.version };
+    } else {
+      console.warn("No active system prompt found in DB. Using fallback default.");
+      activePromptCache = null; // Clear cache if DB fetch specifically returns null (no active prompt)
+      return { text: regularPrompt, version: 0 }; // Default fallback
+    }
+  } catch (error) {
+    console.error("Error fetching active system prompt from DB. Using fallback default:", error);
+    activePromptCache = null; // Clear cache on error to allow retry
+    return { text: regularPrompt, version: 0 }; // Default fallback
+  }
+}
 
 export interface RequestHints {
   latitude: Geo['latitude'];
@@ -50,21 +84,33 @@ About the origin of user's request:
 - country: ${requestHints.country}
 `;
 
-export const systemPrompt = ({
+// Renamed from systemPrompt to getSystemPrompt and made async
+export async function getSystemPrompt({
   selectedChatModel,
   requestHints,
 }: {
   selectedChatModel: string;
   requestHints: RequestHints;
-}) => {
+}): Promise<string> {
+  const { text: baseSystemText, version: promptVersion } = await fetchAndCacheActiveSystemPrompt();
+
+  // console.log(`Using system prompt text: "${baseSystemText}", version: ${promptVersion}`);
+
   const requestPrompt = getRequestPromptFromHints(requestHints);
 
-  if (selectedChatModel === 'chat-model-reasoning') {
-    return `${regularPrompt}\n\n${requestPrompt}`;
-  } else {
-    return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}`;
+  let finalPrompt = baseSystemText;
+
+  if (requestPrompt) {
+    finalPrompt += `\n\n${requestPrompt}`;
   }
-};
+
+  // Conditionally append artifactsPrompt based on the selected chat model
+  if (selectedChatModel !== 'chat-model-reasoning') {
+    finalPrompt += `\n\n${artifactsPrompt}`;
+  }
+
+  return finalPrompt;
+}
 
 export const codePrompt = `
 You are a Python code generator that creates self-contained, executable code snippets. When writing code:
@@ -119,3 +165,8 @@ Improve the following spreadsheet based on the given prompt.
 ${currentContent}
 `
         : '';
+
+export function invalidateActivePromptCache() {
+  // console.log('Admin action: Invalidating active prompt cache.');
+  activePromptCache = null;
+}
